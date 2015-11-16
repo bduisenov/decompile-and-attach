@@ -1,0 +1,47 @@
+<idea-plugin version="2">
+  <id>com.your.company.unique.plugin.id</id>
+  <name>Plugin display name here</name>
+  <version>1.0</version>
+  <vendor email="support@yourcompany.com" url="http://www.yourcompany.com">YourCompany</vendor>
+
+  <description><![CDATA[
+      Enter short description for your plugin here.<br>
+      <em>most HTML tags may be used</em>
+    ]]></description>
+
+  <change-notes><![CDATA[
+      Add change notes here.<br>
+      <em>most HTML tags may be used</em>
+    ]]>
+  </change-notes>
+
+  <!-- please see http://www.jetbrains.org/intellij/sdk/docs/basics/getting_started/build_number_ranges.html for description -->
+  <idea-version since-build="141.0"/>
+
+  <!-- please see http://www.jetbrains.org/intellij/sdk/docs/basics/getting_started/plugin_compatibility.html
+       on how to target different products -->
+  <!-- uncomment to enable plugin in all products
+  <depends>com.intellij.modules.lang</depends>
+  -->
+
+  <extensions defaultExtensionNs="com.intellij">
+    <!-- Add your extensions here -->
+  </extensions>
+
+  <depends>org.jetbrains.java.decompiler</depends>
+
+  <actions>
+    <!-- The <action> element defines an action to register.
+               The mandatory "id" attribute specifies an unique identifier for the action.
+               The mandatory "class" attribute specifies the full-qualified name of the class implementing the action.
+               The mandatory "text" attribute specifies the text of the action (tooltip for toolbar button or text for menu item).
+              The optional "use-shortcut-of" attribute specifies the ID of the action whose keyboard shortcut this action will use.
+              The optional "description" attribute specifies the text which is displayed in the status bar when the action is focused.
+               The optional "icon" attribute specifies the icon which is displayed on the toolbar button or next to the menu item. -->
+    <action id="DecompileAndAttach" class="io.gulp.intellij.DecompileAndAttachAction"
+            text="Decompile And Attach">
+      <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
+    </action>
+  </actions>
+
+</idea-plugin>
