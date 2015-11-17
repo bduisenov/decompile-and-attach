@@ -84,7 +84,7 @@ public class DecompileAndAttachAction extends AnAction {
                                     File tmpJarFile = FileUtil.createTempFile("decompiled", "tmp");
                                     String filename;
                                     try (JarOutputStream jarOutputStream = createJarOutputStream(tmpJarFile)) {
-                                        filename = processor(project, jarOutputStream).apply(jarRoot);
+                                        filename = processor(jarOutputStream).apply(jarRoot);
                                     }
                                     indicator.setFraction(.90);
                                     indicator.setText("Attaching decompiled sources to project");
@@ -133,7 +133,7 @@ public class DecompileAndAttachAction extends AnAction {
                 NotificationType.INFORMATION).notify(project);
     }
 
-    private Function<VirtualFile, String> processor(Project project, JarOutputStream jarOutputStream) {
+    private Function<VirtualFile, String> processor(JarOutputStream jarOutputStream) {
         return new Function<VirtualFile, String>() {
 
             private IdeaDecompiler decompiler = new IdeaDecompiler();
@@ -150,16 +150,15 @@ public class DecompileAndAttachAction extends AnAction {
                 return null;
             }
 
-            private void process(String relativePath, VirtualFile head, Iterable<VirtualFile> tail) throws IOException {
+            private void process(final String relativePath, VirtualFile head, Iterable<VirtualFile> tail) throws IOException {
                 if (head == null) {
                     return;
                 }
                 VirtualFile[] children = head.getChildren();
                 if (head.isDirectory() && children.length > 0) {
-                    relativePath += head.getName() + "/";
-                    addDirectoryEntry(jarOutputStream, relativePath);
+                    String path = relativePath + "/" + head.getName() + "/";
                     Iterable<VirtualFile> xs = Iterables.skip(Arrays.asList(children), 1);
-                    process(relativePath, children[0], xs);
+                    process(path, children[0], xs);
                 } else {
                     if (!head.getName().contains("$") && "class".equals(head.getExtension())) {
                         decompileAndSave(relativePath + head.getNameWithoutExtension() + ".java", head);
@@ -200,15 +199,6 @@ public class DecompileAndAttachAction extends AnAction {
     private static JarOutputStream createJarOutputStream(File jarFile) throws IOException {
         BufferedOutputStream outputStream = new BufferedOutputStream(new FileOutputStream(jarFile));
         return new JarOutputStream(outputStream);
-    }
-
-    private static void addDirectoryEntry(ZipOutputStream output, String relativePath) throws IOException {
-        ZipEntry e = new ZipEntry(relativePath);
-        e.setMethod(ZipEntry.STORED);
-        e.setSize(0);
-        e.setCrc(0);
-        output.putNextEntry(e);
-        output.closeEntry();
     }
 
     private static void addFileEntry(ZipOutputStream output, String relativePath, CharSequence decompiled) throws IOException {

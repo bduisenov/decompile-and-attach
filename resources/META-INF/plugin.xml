@@ -2,16 +2,17 @@
   <id>io.gulp.intellij</id>
   <name>Decompile and Attach</name>
   <version>1.0</version>
-  <vendor email="support@yourcompany.com" url="http://www.yourcompany.com">YourCompany</vendor>
+  <vendor email="bduisenov@gmail.com" url="https://github.com/bduisenov">Babur</vendor>
 
   <description><![CDATA[
-      Enter short description for your plugin here.<br>
-      <em>most HTML tags may be used</em>
+      <a href="https://github.com/bduisenov/decompile-and-attach">GitHub</a> |
+      <a href="https://github.com/bduisenov/decompile-and-attach/issues">Issues</a> |
+      <br/>
+      decompiles jar package using Intellij's build in Fernflower decompiler and attaches decompiled sources to project
     ]]></description>
 
   <change-notes><![CDATA[
-      Add change notes here.<br>
-      <em>most HTML tags may be used</em>
+      fixes
     ]]>
   </change-notes>
 
