@@ -1,7 +1,7 @@
 <idea-plugin version="2">
   <id>io.gulp.intellij</id>
   <name>Decompile and Attach</name>
-  <version>1.0</version>
+  <version>1.2</version>
   <vendor email="bduisenov@gmail.com" url="https://github.com/bduisenov">Babur</vendor>
 
   <description><![CDATA[
@@ -12,7 +12,9 @@
     ]]></description>
 
   <change-notes><![CDATA[
-      fixes
+      1.2 fixed jar archive generation.
+      <br/>
+      1.1 fixes
     ]]>
   </change-notes>
 
