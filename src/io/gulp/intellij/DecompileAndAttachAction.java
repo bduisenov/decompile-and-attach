@@ -2,6 +2,8 @@ package io.gulp.intellij;
 
 import java.io.*;
 import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.function.Function;
 import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
@@ -142,7 +144,7 @@ public class DecompileAndAttachAction extends AnAction {
             public String apply(VirtualFile head) {
                 try {
                     VirtualFile[] children = head.getChildren();
-                    process("", head.getChildren()[0], Iterables.skip(Arrays.asList(children), 1));
+                    process("", head.getChildren()[0], Iterables.skip(Arrays.asList(children), 1), new HashSet<>());
                     return head.getName(); // file name
                 } catch (IOException e) {
                     Throwables.propagate(e);
@@ -150,28 +152,29 @@ public class DecompileAndAttachAction extends AnAction {
                 return null;
             }
 
-            private void process(final String relativePath, VirtualFile head, Iterable<VirtualFile> tail) throws IOException {
+            private void process(final String relativePath, VirtualFile head, Iterable<VirtualFile> tail, Set<String> writtenPaths) throws IOException {
                 if (head == null) {
                     return;
                 }
                 VirtualFile[] children = head.getChildren();
                 if (head.isDirectory() && children.length > 0) {
-                    String path = relativePath + "/" + head.getName() + "/";
+                    String path = relativePath + head.getName() + "/";
+                    addDirectoryEntry(jarOutputStream, path, writtenPaths);
                     Iterable<VirtualFile> xs = Iterables.skip(Arrays.asList(children), 1);
-                    process(path, children[0], xs);
+                    process(path, children[0], xs, writtenPaths);
                 } else {
                     if (!head.getName().contains("$") && "class".equals(head.getExtension())) {
-                        decompileAndSave(relativePath + head.getNameWithoutExtension() + ".java", head);
+                        decompileAndSave(relativePath + head.getNameWithoutExtension() + ".java", head, writtenPaths);
                     }
                 }
                 if (tail != null && !Iterables.isEmpty(tail)) {
-                    process(relativePath, Iterables.getFirst(tail, null), Iterables.skip(tail, 1));
+                    process(relativePath, Iterables.getFirst(tail, null), Iterables.skip(tail, 1), writtenPaths);
                 }
             }
 
-            private void decompileAndSave(String relativeFilePath, VirtualFile file) throws IOException {
+            private void decompileAndSave(String relativeFilePath, VirtualFile file, Set<String> writternPaths) throws IOException {
                 CharSequence decompiled = decompiler.getText(file);
-                addFileEntry(jarOutputStream, relativeFilePath, decompiled);
+                addFileEntry(jarOutputStream, relativeFilePath, writternPaths, decompiled);
             }
         };
     }
@@ -201,8 +204,23 @@ public class DecompileAndAttachAction extends AnAction {
         return new JarOutputStream(outputStream);
     }
 
-    private static void addFileEntry(ZipOutputStream output, String relativePath, CharSequence decompiled) throws IOException {
-        ByteArrayInputStream file = new ByteArrayInputStream(
+    private static void addDirectoryEntry(final ZipOutputStream output, final String relativePath, Set<String> writtenPaths)
+            throws IOException {
+        if (!writtenPaths.add(relativePath)) return;
+
+        ZipEntry e = new ZipEntry(relativePath);
+        e.setMethod(ZipEntry.STORED);
+        e.setSize(0);
+        e.setCrc(0);
+        output.putNextEntry(e);
+        output.closeEntry();
+    }
+
+    private static void addFileEntry(ZipOutputStream jarOS, String relativePath, Set<String> writtenPaths,
+            CharSequence decompiled) throws IOException {
+        if (!writtenPaths.add(relativePath)) return;
+
+        ByteArrayInputStream fileIS = new ByteArrayInputStream(
                 decompiled.toString().getBytes(Charsets.toCharset("UTF-8")));
         long size = decompiled.length();
         ZipEntry e = new ZipEntry(relativePath);
@@ -211,14 +229,14 @@ public class DecompileAndAttachAction extends AnAction {
             e.setSize(0);
             e.setCrc(0);
         }
-        output.putNextEntry(e);
+        jarOS.putNextEntry(e);
         try {
-            FileUtil.copy(file, output);
+            FileUtil.copy(fileIS, jarOS);
         }
         finally {
-            file.close();
+            fileIS.close();
         }
-        output.closeEntry();
+        jarOS.closeEntry();
     }
 
 }
