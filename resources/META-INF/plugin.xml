@@ -8,10 +8,13 @@
       <a href="https://github.com/bduisenov/decompile-and-attach">GitHub</a> |
       <a href="https://github.com/bduisenov/decompile-and-attach/issues">Issues</a> |
       <br/>
-      decompiles jar package using Intellij's build in Fernflower decompiler and attaches decompiled sources to project
+      decompiles jar package using Intellij's build in Fernflower decompiler and attaches decompiled sources to project.
+      the purpose is to have a possibility for searching through compiled code (Search Scope: Project and Libraries).
     ]]></description>
 
   <change-notes><![CDATA[
+      1.3 added functionality for attaching decompiled sources to owner module of a jar
+      <br/>
       1.2 fixed jar archive generation.
       <br/>
       1.1 fixes

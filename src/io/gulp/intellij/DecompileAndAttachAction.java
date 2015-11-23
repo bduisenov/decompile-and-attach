@@ -9,6 +9,7 @@ import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import com.intellij.openapi.application.ModalityState;
 import org.apache.commons.codec.Charsets;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.concurrency.AsyncPromise;
@@ -24,14 +25,14 @@ import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.CommonDataKeys;
 import com.intellij.openapi.actionSystem.Presentation;
 import com.intellij.openapi.application.ApplicationManager;
-import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.Result;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.diagnostic.Logger;
+import com.intellij.openapi.module.Module;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.roots.OrderRootType;
+import com.intellij.openapi.roots.*;
 import com.intellij.openapi.roots.libraries.Library;
 import com.intellij.openapi.roots.libraries.LibraryTablesRegistrar;
 import com.intellij.openapi.roots.ui.configuration.PathUIUtils;
@@ -40,6 +41,9 @@ import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.vfs.JarFileSystem;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
+
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
 
 /**
  * Created by bduisenov on 12/11/15.
@@ -74,14 +78,15 @@ public class DecompileAndAttachAction extends AnAction {
 
         findOrCreateBaseDir(project) //
                 .done((baseDir) -> {
-                    VirtualFile virtualFile = event.getData(CommonDataKeys.VIRTUAL_FILE);
-                    if ("jar".equals(virtualFile.getExtension())) {
+                    VirtualFile sourceVF = event.getData(CommonDataKeys.VIRTUAL_FILE);
+                    checkNotNull(sourceVF, "event#getData(VIRTUAL_FILE) returned null");
+                    if ("jar".equals(sourceVF.getExtension())) {
                         new Task.Backgroundable(project, "Decompiling...", false) {
 
                             @Override
                             public void run(@NotNull ProgressIndicator indicator) {
                                 indicator.setFraction(0.0);
-                                VirtualFile jarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(virtualFile);
+                                VirtualFile jarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(sourceVF);
                                 try {
                                     File tmpJarFile = FileUtil.createTempFile("decompiled", "tmp");
                                     String filename;
@@ -90,7 +95,7 @@ public class DecompileAndAttachAction extends AnAction {
                                     }
                                     indicator.setFraction(.90);
                                     indicator.setText("Attaching decompiled sources to project");
-                                    copyAndAttach(project, baseDir, tmpJarFile, filename);
+                                    copyAndAttach(project, baseDir, sourceVF, tmpJarFile, filename);
                                 } catch (IOException e) {
                                     Throwables.propagate(e);
                                 }
@@ -103,21 +108,24 @@ public class DecompileAndAttachAction extends AnAction {
                 });
     }
 
-    private void copyAndAttach(Project project, VirtualFile baseDir, File tmpJarFile, String filename) throws IOException {
+    private void copyAndAttach(Project project, VirtualFile baseDir, VirtualFile sourceVF, File tmpJarFile, String filename)
+            throws IOException {
         String libraryName = filename.replace(".jar", "-sources.jar");
-        File sourceJar = new File(baseDir.getPath() + File.separator + libraryName);
-        boolean newFile = sourceJar.createNewFile();
+        File resultJar = new File(baseDir.getPath() + File.separator + libraryName);
+        boolean newFile = resultJar.createNewFile();
         logger.debug("file exists?: ", newFile);
-        FileUtil.copy(tmpJarFile, sourceJar);
+        FileUtil.copy(tmpJarFile, resultJar);
         FileUtil.delete(tmpJarFile);
         if (newFile) {
             // library is added to project for a first time
             ApplicationManager.getApplication().invokeAndWait(() -> {
-                VirtualFile sourceJarVF = LocalFileSystem.getInstance()
-                        .refreshAndFindFileByIoFile(sourceJar);
-                VirtualFile sourceJarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(sourceJarVF);
-                VirtualFile[] roots = PathUIUtils.scanAndSelectDetectedJavaSourceRoots(null, new VirtualFile[]{sourceJarRoot});
+                VirtualFile resultJarVF = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(resultJar);
+                checkNotNull(resultJarVF, "could not find Virtual File of %s", resultJar.getAbsolutePath());
+                VirtualFile resultJarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(resultJarVF);
+                VirtualFile[] roots = PathUIUtils.scanAndSelectDetectedJavaSourceRoots(null,
+                        new VirtualFile[] {resultJarRoot});
                 new WriteCommandAction<Void>(project) {
+
                     @Override
                     protected void run(@NotNull Result<Void> result) throws Throwable {
                         Library library = LibraryTablesRegistrar.getInstance().getLibraryTable(project)
@@ -127,12 +135,21 @@ public class DecompileAndAttachAction extends AnAction {
                             model.addRoot(root, OrderRootType.SOURCES);
                         }
                         model.commit();
+                        ProjectFileIndex fileIndex = ProjectRootManager.getInstance(project).getFileIndex();
+                        Module currentModule = fileIndex.getModuleForFile(sourceVF);
+                        if (currentModule != null) {
+                            JavaProjectModelModificationService.getInstance(project).addDependency(currentModule, library,
+                                    DependencyScope.COMPILE);
+                        } else {
+                            logger.warn("could not find current Module");
+                        }
                     }
                 }.execute();
             }, ModalityState.NON_MODAL);
         }
-        new Notification("DecompileAndAttach", "Jar Sources Added", "decompiled sources " + libraryName + " where added successfully",
-                NotificationType.INFORMATION).notify(project);
+        new Notification("DecompileAndAttach", "Jar Sources Added",
+                "decompiled sources " + libraryName + " where added successfully", NotificationType.INFORMATION)
+                        .notify(project);
     }
 
     private Function<VirtualFile, String> processor(JarOutputStream jarOutputStream) {
@@ -144,15 +161,18 @@ public class DecompileAndAttachAction extends AnAction {
             public String apply(VirtualFile head) {
                 try {
                     VirtualFile[] children = head.getChildren();
+                    checkState(children.length > 0, "jar file is empty");
                     process("", head.getChildren()[0], Iterables.skip(Arrays.asList(children), 1), new HashSet<>());
-                    return head.getName(); // file name
+                    final String result = head.getName();
+                    logger.debug("#apply({}): returned {}", head, result);
+                    return result; // file name
                 } catch (IOException e) {
                     Throwables.propagate(e);
                 }
                 return null;
             }
 
-            private void process(final String relativePath, VirtualFile head, Iterable<VirtualFile> tail, Set<String> writtenPaths) throws IOException {
+            private void process(String relativePath, VirtualFile head, Iterable<VirtualFile> tail, Set<String> writtenPaths) throws IOException {
                 if (head == null) {
                     return;
                 }
@@ -204,7 +224,7 @@ public class DecompileAndAttachAction extends AnAction {
         return new JarOutputStream(outputStream);
     }
 
-    private static void addDirectoryEntry(final ZipOutputStream output, final String relativePath, Set<String> writtenPaths)
+    private static void addDirectoryEntry(ZipOutputStream output, String relativePath, Set<String> writtenPaths)
             throws IOException {
         if (!writtenPaths.add(relativePath)) return;
 
