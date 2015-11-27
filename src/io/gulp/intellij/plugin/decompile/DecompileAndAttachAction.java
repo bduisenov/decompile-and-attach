@@ -1,4 +1,4 @@
-package io.gulp.intellij;
+package io.gulp.intellij.plugin.decompile;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
@@ -79,7 +79,11 @@ public class DecompileAndAttachAction extends AnAction {
         if (project == null) {
             return;
         }
-
+        final FolderSelectionForm form = new FolderSelectionForm(project);
+        if (!form.showAndGet()) {
+            return;
+        }
+        System.out.println(form.getSelectedPath());
         findOrCreateBaseDir(project) //
                 .done((baseDir) -> {
                     VirtualFile[] sourceVFs = event.getData(PlatformDataKeys.VIRTUAL_FILE_ARRAY);
