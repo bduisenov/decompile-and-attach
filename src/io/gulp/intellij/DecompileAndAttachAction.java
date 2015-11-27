@@ -40,10 +40,12 @@ import com.intellij.openapi.roots.*;
 import com.intellij.openapi.roots.libraries.Library;
 import com.intellij.openapi.roots.ui.configuration.PathUIUtils;
 import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.util.Pair;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.vfs.JarFileSystem;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.compiled.ClassFileDecompilers;
 import com.intellij.util.CommonProcessors;
 
 /**
@@ -90,13 +92,18 @@ public class DecompileAndAttachAction extends AnAction {
                                 VirtualFile jarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(sourceVF);
                                 try {
                                     File tmpJarFile = FileUtil.createTempFile("decompiled", "tmp");
-                                    String filename;
+                                    Pair<String, Set<String>> result;
                                     try (JarOutputStream jarOutputStream = createJarOutputStream(tmpJarFile)) {
-                                        filename = processor(jarOutputStream).apply(jarRoot);
+                                        result = processor(jarOutputStream).apply(jarRoot);
                                     }
                                     indicator.setFraction(.90);
                                     indicator.setText("Attaching decompiled sources to project");
-                                    copyAndAttach(project, baseDir, sourceVF, tmpJarFile, filename);
+                                    for (String fileName : result.second) {
+                                        new Notification("DecompileAndAttach", "Decompilation problem",
+                                                "fernflower could not decompile class " + fileName, NotificationType.WARNING)
+                                                        .notify(project);
+                                    }
+                                    copyAndAttach(project, baseDir, sourceVF, tmpJarFile, result.first);
                                 } catch (Exception e) {
                                     new Notification("DecompileAndAttach", "Jar lib couldn't be decompiled", e.getMessage(),
                                             NotificationType.ERROR).notify(project);
@@ -144,7 +151,7 @@ public class DecompileAndAttachAction extends AnAction {
 
                         new Notification("DecompileAndAttach",
                                 "Jar Sources Added", "decompiled sources " + libraryName
-                                        + " where added successfully to dependency of a module " + currentModule.getName(),
+                                        + " where added successfully to dependency of a module '" + currentModule.getName() + "'",
                                 NotificationType.INFORMATION).notify(project);
                     }
                 }.execute();
@@ -171,20 +178,21 @@ public class DecompileAndAttachAction extends AnAction {
         return Optional.ofNullable(result);
     }
 
-    private Function<VirtualFile, String> processor(JarOutputStream jarOutputStream) {
-        return new Function<VirtualFile, String>() {
+    private Function<VirtualFile, Pair<String, Set<String>>> processor(JarOutputStream jarOutputStream) {
+        return new Function<VirtualFile, Pair<String, Set<String>>>() {
 
             private IdeaDecompiler decompiler = new IdeaDecompiler();
+            private Set<String> failed = new HashSet<>();
 
             @Override
-            public String apply(VirtualFile head) {
+            public Pair<String, Set<String>> apply(VirtualFile head) {
                 try {
                     VirtualFile[] children = head.getChildren();
                     checkState(children.length > 0, "jar file is empty");
                     process("", head.getChildren()[0], Iterables.skip(Arrays.asList(children), 1), new HashSet<>());
                     final String result = head.getName();
                     logger.debug("#apply({}): returned {}", head, result);
-                    return result; // file name
+                    return Pair.create(result, failed);
                 } catch (IOException e) {
                     Throwables.propagate(e);
                 }
@@ -212,8 +220,12 @@ public class DecompileAndAttachAction extends AnAction {
             }
 
             private void decompileAndSave(String relativeFilePath, VirtualFile file, Set<String> writternPaths) throws IOException {
-                CharSequence decompiled = decompiler.getText(file);
-                addFileEntry(jarOutputStream, relativeFilePath, writternPaths, decompiled);
+                try {
+                    CharSequence decompiled = decompiler.getText(file);
+                    addFileEntry(jarOutputStream, relativeFilePath, writternPaths, decompiled);
+                } catch (ClassFileDecompilers.Light.CannotDecompileException e) {
+                    failed.add(file.getName());
+                }
             }
         };
     }
