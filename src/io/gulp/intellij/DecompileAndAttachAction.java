@@ -2,6 +2,7 @@ package io.gulp.intellij;
 
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
+import static com.intellij.notification.NotificationType.*;
 
 import java.io.*;
 import java.util.Arrays;
@@ -22,7 +23,6 @@ import org.jetbrains.java.decompiler.IdeaDecompiler;
 import com.google.common.base.Throwables;
 import com.google.common.collect.Iterables;
 import com.intellij.notification.Notification;
-import com.intellij.notification.NotificationType;
 import com.intellij.openapi.actionSystem.*;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
@@ -53,6 +53,10 @@ public class DecompileAndAttachAction extends AnAction {
 
     private String baseDirName = "decompiled";
 
+    /**
+     * show 'decompile and attach' option only for *.jar files
+     * @param e
+     */
     @Override
     public void update(AnActionEvent e) {
         Presentation presentation = e.getPresentation();
@@ -80,89 +84,82 @@ public class DecompileAndAttachAction extends AnAction {
                     VirtualFile[] sourceVFs = event.getData(PlatformDataKeys.VIRTUAL_FILE_ARRAY);
                     checkState(sourceVFs != null && sourceVFs.length > 0,
                             "event#getData(VIRTUAL_FILE_ARRAY) returned empty array");
-                    for (VirtualFile sourceVF : sourceVFs) {
-                        if ("jar".equals(sourceVF.getExtension())) {
-                            new Task.Backgroundable(project, "Decompiling...", false) {
+                    new Task.Backgroundable(project, "Decompiling...", false) {
 
-                                @Override
-                                public void run(@NotNull ProgressIndicator indicator) {
-                                    indicator.setFraction(0.0);
-                                    VirtualFile jarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(sourceVF);
-                                    try {
-                                        File tmpJarFile = FileUtil.createTempFile("decompiled", "tmp");
-                                        Pair<String, Set<String>> result;
-                                        try (JarOutputStream jarOutputStream = createJarOutputStream(tmpJarFile)) {
-                                            result = processor(jarOutputStream).apply(jarRoot);
-                                        }
-                                        indicator.setFraction(.90);
-                                        indicator.setText("Attaching decompiled sources to project");
-                                        for (String fileName : result.second) {
-                                            new Notification("DecompileAndAttach", "Decompilation problem",
-                                                    "fernflower could not decompile class " + fileName,
-                                                    NotificationType.WARNING).notify(project);
-                                        }
-                                        copyAndAttach(project, baseDir, sourceVF, tmpJarFile, result.first);
-                                    } catch (Exception e) {
-                                        new Notification("DecompileAndAttach", "Jar lib couldn't be decompiled",
-                                                e.getMessage(), NotificationType.ERROR).notify(project);
-                                        Throwables.propagate(e);
-                                    }
-                                    indicator.setFraction(1.0);
-                                }
-                            }.queue();
-                        } else {
-                            new Notification("DecompileAndAttach", "Invalid File",
-                                    "Invalid file " + sourceVF.getName() + " .You must choose jar file.",
-                                    NotificationType.INFORMATION).notify(project);
-
+                        @Override
+                        public void run(@NotNull ProgressIndicator indicator) {
+                            indicator.setFraction(0.1);
+                            Arrays.asList(sourceVFs).stream() //
+                                    .filter((vf) -> "jar".equals(vf.getExtension())) //
+                                    .forEach((sourceVF) -> process(project, baseDir, sourceVF, indicator, 1D / sourceVFs.length));
+                            indicator.setFraction(1.0);
                         }
-                    }
+                    }.queue();
                 });
     }
 
-    private void copyAndAttach(Project project, VirtualFile baseDir, VirtualFile sourceVF, File tmpJarFile, String filename)
-            throws IOException {
-        String libraryName = filename.replace(".jar", "-sources.jar");
-        File resultJar = new File(baseDir.getPath() + File.separator + libraryName);
-        boolean newFile = resultJar.createNewFile();
-        logger.debug("file exists?: ", newFile);
-        FileUtil.copy(tmpJarFile, resultJar);
-        FileUtil.delete(tmpJarFile);
-
-        if (newFile) {
-            // library is added to project for a first time
-            ApplicationManager.getApplication().invokeAndWait(() -> {
-                VirtualFile resultJarVF = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(resultJar);
-                checkNotNull(resultJarVF, "could not find Virtual File of %s", resultJar.getAbsolutePath());
-                VirtualFile resultJarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(resultJarVF);
-                VirtualFile[] roots = PathUIUtils.scanAndSelectDetectedJavaSourceRoots(null,
-                        new VirtualFile[] {resultJarRoot});
-                new WriteCommandAction<Void>(project) {
-
-                    @Override
-                    protected void run(@NotNull Result<Void> result) throws Throwable {
-                        final Module currentModule = ProjectRootManager.getInstance(project).getFileIndex()
-                                .getModuleForFile(sourceVF);
-                        checkNotNull(currentModule, "could not find current module");
-                        Optional<Library> moduleLib = findExistingModuleLib(currentModule, sourceVF);
-                        checkState(moduleLib.isPresent(), "could not find library in module dependencies");
-                        Library.ModifiableModel model = moduleLib.get().getModifiableModel();
-                        for (VirtualFile root : roots) {
-                            model.addRoot(root, OrderRootType.SOURCES);
-                        }
-                        model.commit();
-
-                        new Notification("DecompileAndAttach", "Jar Sources Added", "decompiled sources " + libraryName
-                                + " where added successfully to dependency of a module '" + currentModule.getName() + "'",
-                                NotificationType.INFORMATION).notify(project);
-                    }
-                }.execute();
-            } , ModalityState.NON_MODAL);
+    private void process(Project project, VirtualFile baseDir, VirtualFile sourceVF, ProgressIndicator indicator, double fractionStep) {
+        indicator.setText("Decompiling '" + sourceVF.getName() + "'");
+        VirtualFile jarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(sourceVF);
+        try {
+            File tmpJarFile = FileUtil.createTempFile("decompiled", "tmp");
+            Pair<String, Set<String>> result;
+            try (JarOutputStream jarOutputStream = createJarOutputStream(tmpJarFile)) {
+                result = processor(jarOutputStream).apply(jarRoot);
+            }
+            indicator.setFraction(indicator.getFraction() + (fractionStep * 70 / 100));
+            indicator.setText("Attaching decompiled sources for '" + sourceVF.getName() + "'");
+            result.second.forEach((failedFile) -> new Notification("DecompileAndAttach", "Decompilation problem",
+                    "fernflower could not decompile class " + failedFile, WARNING).notify(project));
+            File resultJar = copy(project, baseDir, sourceVF, tmpJarFile, result.first);
+            attach(project, sourceVF, resultJar);
+            indicator.setFraction(indicator.getFraction() + (fractionStep * 30 / 100));
+            FileUtil.delete(tmpJarFile);
+        } catch (Exception e) {
+            new Notification("DecompileAndAttach", "Jar lib couldn't be decompiled", e.getMessage(), ERROR).notify(project);
+            Throwables.propagate(e);
         }
-
     }
 
-    private Optional<Library> findExistingModuleLib(Module module, VirtualFile sourceVF) {
+    private File copy(Project project, VirtualFile baseDir, VirtualFile sourceVF, File tmpJarFile, String filename)
+            throws IOException {
+        String libraryName = filename.replace(".jar", "-sources.jar");
+        File result = new File(baseDir.getPath() + File.separator + libraryName);
+        FileUtil.copy(tmpJarFile, result);
+        return result;
+    }
+
+    private void attach(final Project project, final VirtualFile sourceVF, File resultJar) {
+        ApplicationManager.getApplication().invokeAndWait(() -> {
+            VirtualFile resultJarVF = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(resultJar);
+            checkNotNull(resultJarVF, "could not find Virtual File of %s", resultJar.getAbsolutePath());
+            VirtualFile resultJarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(resultJarVF);
+            VirtualFile[] roots = PathUIUtils.scanAndSelectDetectedJavaSourceRoots(null,
+                    new VirtualFile[] {resultJarRoot});
+            new WriteCommandAction<Void>(project) {
+
+                @Override
+                protected void run(@NotNull Result<Void> result) throws Throwable {
+                    final Module currentModule = ProjectRootManager.getInstance(project).getFileIndex()
+                            .getModuleForFile(sourceVF);
+                    checkNotNull(currentModule, "could not find current module");
+                    Optional<Library> moduleLib = findModuleDependency(currentModule, sourceVF);
+                    checkState(moduleLib.isPresent(), "could not find library in module dependencies");
+                    Library.ModifiableModel model = moduleLib.get().getModifiableModel();
+                    for (VirtualFile root : roots) {
+                        model.addRoot(root, OrderRootType.SOURCES);
+                    }
+                    model.commit();
+
+                    new Notification("DecompileAndAttach", "Jar Sources Added", "decompiled sources " + resultJar.getName()
+                            + " where added successfully to dependency of a module '" + currentModule.getName() + "'",
+                            INFORMATION).notify(project);
+                }
+            }.execute();
+        } , ModalityState.NON_MODAL);
+    }
+
+    private Optional<Library> findModuleDependency(Module module, VirtualFile sourceVF) {
         final CommonProcessors.FindProcessor<OrderEntry> processor = new CommonProcessors.FindProcessor<OrderEntry>() {
 
             @Override
@@ -180,6 +177,14 @@ public class DecompileAndAttachAction extends AnAction {
         return Optional.ofNullable(result);
     }
 
+    /**
+     * recursively goes through jar archive and decompiles all found classes.
+     * in case if decompilation fails on a class, the class name is put to {@code failed} Set
+     * and then is returned with result.
+     * @param jarOutputStream
+     * @return {@code Pair<String, Set<String>>} containing the filename of a library and a set of
+     * class names which failed to decompile
+     */
     private Function<VirtualFile, Pair<String, Set<String>>> processor(JarOutputStream jarOutputStream) {
         return new Function<VirtualFile, Pair<String, Set<String>>>() {
 
@@ -193,9 +198,10 @@ public class DecompileAndAttachAction extends AnAction {
                     VirtualFile[] children = head.getChildren();
                     checkState(children.length > 0, "jar file is empty");
                     process("", head.getChildren()[0], Iterables.skip(Arrays.asList(children), 1), new HashSet<>());
-                    final String result = head.getName();
+                    final String libraryName = head.getName();
+                    final Pair<String, Set<String>> result = Pair.create(libraryName, failed);
                     logger.debug("#apply({}): returned {}", head, result);
-                    return Pair.create(result, failed);
+                    return result;
                 } catch (IOException e) {
                     Throwables.propagate(e);
                 }
