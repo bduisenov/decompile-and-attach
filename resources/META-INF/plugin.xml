@@ -1,7 +1,7 @@
 <idea-plugin version="2">
   <id>io.gulp.intellij</id>
   <name>Decompile and Attach</name>
-  <version>1.2</version>
+  <version>1.4</version>
   <vendor email="bduisenov@gmail.com" url="https://github.com/bduisenov">Babur</vendor>
 
   <description><![CDATA[
@@ -10,9 +10,13 @@
       <br/>
       decompiles jar package using Intellij's build in Fernflower decompiler and attaches decompiled sources to project.
       the purpose is to have a possibility for searching through compiled code (Search Scope: Project and Libraries).
+      <br/>
+      to use it, just right click on jar file and select "Decompile And Attach" action
     ]]></description>
 
   <change-notes><![CDATA[
+      1.4 decompiled sources are attached to source jar lib instead of creating a new lib
+      <br/>
       1.3 added functionality for attaching decompiled sources to owner module of a jar
       <br/>
       1.2 fixed jar archive generation.

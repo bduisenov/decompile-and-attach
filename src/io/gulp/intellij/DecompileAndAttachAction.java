@@ -1,15 +1,18 @@
 package io.gulp.intellij;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
+
 import java.io.*;
 import java.util.Arrays;
 import java.util.HashSet;
+import java.util.Optional;
 import java.util.Set;
 import java.util.function.Function;
 import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-import com.intellij.openapi.application.ModalityState;
 import org.apache.commons.codec.Charsets;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.concurrency.AsyncPromise;
@@ -25,6 +28,7 @@ import com.intellij.openapi.actionSystem.AnActionEvent;
 import com.intellij.openapi.actionSystem.CommonDataKeys;
 import com.intellij.openapi.actionSystem.Presentation;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.Result;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.diagnostic.Logger;
@@ -34,16 +38,13 @@ import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.roots.*;
 import com.intellij.openapi.roots.libraries.Library;
-import com.intellij.openapi.roots.libraries.LibraryTablesRegistrar;
 import com.intellij.openapi.roots.ui.configuration.PathUIUtils;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.vfs.JarFileSystem;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
-
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
+import com.intellij.util.CommonProcessors;
 
 /**
  * Created by bduisenov on 12/11/15.
@@ -96,7 +97,9 @@ public class DecompileAndAttachAction extends AnAction {
                                     indicator.setFraction(.90);
                                     indicator.setText("Attaching decompiled sources to project");
                                     copyAndAttach(project, baseDir, sourceVF, tmpJarFile, filename);
-                                } catch (IOException e) {
+                                } catch (Exception e) {
+                                    new Notification("DecompileAndAttach", "Jar lib couldn't be decompiled", e.getMessage(),
+                                            NotificationType.ERROR).notify(project);
                                     Throwables.propagate(e);
                                 }
                                 indicator.setFraction(1.0);
@@ -116,40 +119,56 @@ public class DecompileAndAttachAction extends AnAction {
         logger.debug("file exists?: ", newFile);
         FileUtil.copy(tmpJarFile, resultJar);
         FileUtil.delete(tmpJarFile);
+
         if (newFile) {
             // library is added to project for a first time
             ApplicationManager.getApplication().invokeAndWait(() -> {
                 VirtualFile resultJarVF = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(resultJar);
                 checkNotNull(resultJarVF, "could not find Virtual File of %s", resultJar.getAbsolutePath());
                 VirtualFile resultJarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(resultJarVF);
-                VirtualFile[] roots = PathUIUtils.scanAndSelectDetectedJavaSourceRoots(null,
-                        new VirtualFile[] {resultJarRoot});
+                VirtualFile[] roots = PathUIUtils.scanAndSelectDetectedJavaSourceRoots(null, new VirtualFile[] {resultJarRoot});
                 new WriteCommandAction<Void>(project) {
 
                     @Override
                     protected void run(@NotNull Result<Void> result) throws Throwable {
-                        Library library = LibraryTablesRegistrar.getInstance().getLibraryTable(project)
-                                .createLibrary(libraryName);
-                        Library.ModifiableModel model = library.getModifiableModel();
+                        final Module currentModule = ProjectRootManager.getInstance(project).getFileIndex()
+                                .getModuleForFile(sourceVF);
+                        checkNotNull(currentModule, "could not find current module");
+                        Optional<Library> moduleLib = findExistingModuleLib(currentModule, sourceVF);
+                        checkState(moduleLib.isPresent(), "could not find library in module dependencies");
+                        Library.ModifiableModel model = moduleLib.get().getModifiableModel();
                         for (VirtualFile root : roots) {
                             model.addRoot(root, OrderRootType.SOURCES);
                         }
                         model.commit();
-                        ProjectFileIndex fileIndex = ProjectRootManager.getInstance(project).getFileIndex();
-                        Module currentModule = fileIndex.getModuleForFile(sourceVF);
-                        if (currentModule != null) {
-                            JavaProjectModelModificationService.getInstance(project).addDependency(currentModule, library,
-                                    DependencyScope.COMPILE);
-                        } else {
-                            logger.warn("could not find current Module");
-                        }
+
+                        new Notification("DecompileAndAttach",
+                                "Jar Sources Added", "decompiled sources " + libraryName
+                                        + " where added successfully to dependency of a module " + currentModule.getName(),
+                                NotificationType.INFORMATION).notify(project);
                     }
                 }.execute();
             }, ModalityState.NON_MODAL);
         }
-        new Notification("DecompileAndAttach", "Jar Sources Added",
-                "decompiled sources " + libraryName + " where added successfully", NotificationType.INFORMATION)
-                        .notify(project);
+
+    }
+
+    private Optional<Library> findExistingModuleLib(Module module, VirtualFile sourceVF) {
+        final CommonProcessors.FindProcessor<OrderEntry> processor = new CommonProcessors.FindProcessor<OrderEntry>() {
+
+            @Override
+            protected boolean accept(OrderEntry orderEntry) {
+                final String[] urls = orderEntry.getUrls(OrderRootType.CLASSES);
+                final boolean contains = Arrays.asList(urls).contains("jar://" + sourceVF.getPath() + "!/");
+                return contains && orderEntry instanceof LibraryOrderEntry;
+            }
+        };
+        ModuleRootManager.getInstance(module).orderEntries().forEach(processor);
+        Library result = null;
+        if (processor.getFoundValue() != null) {
+            result = ((LibraryOrderEntry) processor.getFoundValue()).getLibrary();
+        }
+        return Optional.ofNullable(result);
     }
 
     private Function<VirtualFile, String> processor(JarOutputStream jarOutputStream) {
