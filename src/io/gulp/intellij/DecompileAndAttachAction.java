@@ -14,6 +14,7 @@ import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
+import com.intellij.openapi.progress.ProcessCanceledException;
 import org.apache.commons.codec.Charsets;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.concurrency.AsyncPromise;
@@ -84,7 +85,7 @@ public class DecompileAndAttachAction extends AnAction {
                     VirtualFile[] sourceVFs = event.getData(PlatformDataKeys.VIRTUAL_FILE_ARRAY);
                     checkState(sourceVFs != null && sourceVFs.length > 0,
                             "event#getData(VIRTUAL_FILE_ARRAY) returned empty array");
-                    new Task.Backgroundable(project, "Decompiling...", false) {
+                    new Task.Backgroundable(project, "Decompiling...", true) {
 
                         @Override
                         public void run(@NotNull ProgressIndicator indicator) {
@@ -93,6 +94,11 @@ public class DecompileAndAttachAction extends AnAction {
                                     .filter((vf) -> "jar".equals(vf.getExtension())) //
                                     .forEach((sourceVF) -> process(project, baseDir, sourceVF, indicator, 1D / sourceVFs.length));
                             indicator.setFraction(1.0);
+                        }
+
+                        @Override
+                        public boolean shouldStartInBackground() {
+                            return true;
                         }
                     }.queue();
                 });
@@ -116,7 +122,9 @@ public class DecompileAndAttachAction extends AnAction {
             indicator.setFraction(indicator.getFraction() + (fractionStep * 30 / 100));
             FileUtil.delete(tmpJarFile);
         } catch (Exception e) {
-            new Notification("DecompileAndAttach", "Jar lib couldn't be decompiled", e.getMessage(), ERROR).notify(project);
+            if (!(e instanceof ProcessCanceledException)) {
+                new Notification("DecompileAndAttach", "Jar lib couldn't be decompiled", e.getMessage(), ERROR).notify(project);
+            }
             Throwables.propagate(e);
         }
     }
