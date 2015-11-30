@@ -48,7 +48,7 @@
               The optional "use-shortcut-of" attribute specifies the ID of the action whose keyboard shortcut this action will use.
               The optional "description" attribute specifies the text which is displayed in the status bar when the action is focused.
                The optional "icon" attribute specifies the icon which is displayed on the toolbar button or next to the menu item. -->
-    <action id="DecompileAndAttach" class="io.gulp.intellij.DecompileAndAttachAction"
+    <action id="DecompileAndAttach" class="io.gulp.intellij.plugin.decompile.DecompileAndAttachAction"
             text="Decompile And Attach">
       <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
     </action>
