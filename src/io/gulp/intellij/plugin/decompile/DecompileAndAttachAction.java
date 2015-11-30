@@ -14,15 +14,14 @@ import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-import com.intellij.openapi.progress.ProcessCanceledException;
+import com.google.common.base.Strings;
 import org.apache.commons.codec.Charsets;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.concurrency.AsyncPromise;
-import org.jetbrains.concurrency.Promise;
 import org.jetbrains.java.decompiler.IdeaDecompiler;
 
 import com.google.common.base.Throwables;
 import com.google.common.collect.Iterables;
+import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.notification.Notification;
 import com.intellij.openapi.actionSystem.*;
 import com.intellij.openapi.application.ApplicationManager;
@@ -31,6 +30,7 @@ import com.intellij.openapi.application.Result;
 import com.intellij.openapi.command.WriteCommandAction;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.module.Module;
+import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
@@ -52,7 +52,7 @@ public class DecompileAndAttachAction extends AnAction {
 
     private static final Logger logger = Logger.getInstance(DecompileAndAttachAction.class);
 
-    private String baseDirName = "decompiled";
+    private final String baseDirProjectSettingsKey = "io.gulp.intellij.baseDir";
 
     /**
      * show 'decompile and attach' option only for *.jar files
@@ -79,36 +79,47 @@ public class DecompileAndAttachAction extends AnAction {
         if (project == null) {
             return;
         }
-        final FolderSelectionForm form = new FolderSelectionForm(project);
-        if (!form.showAndGet()) {
+
+        final Optional<String> baseDirPath = getBaseDirPath(project);
+        if (!baseDirPath.isPresent()) {
             return;
         }
-        System.out.println(form.getSelectedPath());
-        findOrCreateBaseDir(project) //
-                .done((baseDir) -> {
-                    VirtualFile[] sourceVFs = event.getData(PlatformDataKeys.VIRTUAL_FILE_ARRAY);
-                    checkState(sourceVFs != null && sourceVFs.length > 0,
-                            "event#getData(VIRTUAL_FILE_ARRAY) returned empty array");
-                    new Task.Backgroundable(project, "Decompiling...", true) {
+        VirtualFile[] sourceVFs = event.getData(PlatformDataKeys.VIRTUAL_FILE_ARRAY);
+        checkState(sourceVFs != null && sourceVFs.length > 0, "event#getData(VIRTUAL_FILE_ARRAY) returned empty array");
+        new Task.Backgroundable(project, "Decompiling...", true) {
 
-                        @Override
-                        public void run(@NotNull ProgressIndicator indicator) {
-                            indicator.setFraction(0.1);
-                            Arrays.asList(sourceVFs).stream() //
-                                    .filter((vf) -> "jar".equals(vf.getExtension())) //
-                                    .forEach((sourceVF) -> process(project, baseDir, sourceVF, indicator, 1D / sourceVFs.length));
-                            indicator.setFraction(1.0);
-                        }
+            @Override
+            public void run(@NotNull ProgressIndicator indicator) {
+                indicator.setFraction(0.1);
+                Arrays.asList(sourceVFs).stream() //
+                        .filter((vf) -> "jar".equals(vf.getExtension())) //
+                        .forEach((sourceVF) -> process(project, baseDirPath.get(), sourceVF, indicator, 1D / sourceVFs.length));
+                indicator.setFraction(1.0);
+            }
 
-                        @Override
-                        public boolean shouldStartInBackground() {
-                            return true;
-                        }
-                    }.queue();
-                });
+            @Override
+            public boolean shouldStartInBackground() {
+                return true;
+            }
+        }.queue();
     }
 
-    private void process(Project project, VirtualFile baseDir, VirtualFile sourceVF, ProgressIndicator indicator, double fractionStep) {
+    private Optional<String> getBaseDirPath(Project project) {
+        String result = null;
+        final String baseDirPath = PropertiesComponent.getInstance(project).getValue(baseDirProjectSettingsKey);
+        if (Strings.isNullOrEmpty(baseDirPath)) {
+            final FolderSelectionForm form = new FolderSelectionForm(project);
+            if (form.showAndGet()) {
+                result = form.getSelectedPath();
+                PropertiesComponent.getInstance(project).setValue(baseDirProjectSettingsKey, result);
+            }
+        } else {
+            result = baseDirPath;
+        }
+        return Optional.ofNullable(result);
+    }
+
+    private void process(Project project, String baseDirPath, VirtualFile sourceVF, ProgressIndicator indicator, double fractionStep) {
         indicator.setText("Decompiling '" + sourceVF.getName() + "'");
         VirtualFile jarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(sourceVF);
         try {
@@ -121,7 +132,7 @@ public class DecompileAndAttachAction extends AnAction {
             indicator.setText("Attaching decompiled sources for '" + sourceVF.getName() + "'");
             result.second.forEach((failedFile) -> new Notification("DecompileAndAttach", "Decompilation problem",
                     "fernflower could not decompile class " + failedFile, WARNING).notify(project));
-            File resultJar = copy(project, baseDir, sourceVF, tmpJarFile, result.first);
+            File resultJar = copy(project, baseDirPath, sourceVF, tmpJarFile, result.first);
             attach(project, sourceVF, resultJar);
             indicator.setFraction(indicator.getFraction() + (fractionStep * 30 / 100));
             FileUtil.delete(tmpJarFile);
@@ -133,10 +144,10 @@ public class DecompileAndAttachAction extends AnAction {
         }
     }
 
-    private File copy(Project project, VirtualFile baseDir, VirtualFile sourceVF, File tmpJarFile, String filename)
+    private File copy(Project project, String baseDirPath, VirtualFile sourceVF, File tmpJarFile, String filename)
             throws IOException {
         String libraryName = filename.replace(".jar", "-sources.jar");
-        File result = new File(baseDir.getPath() + File.separator + libraryName);
+        File result = new File(baseDirPath + File.separator + libraryName);
         FileUtil.copy(tmpJarFile, result);
         return result;
     }
@@ -251,26 +262,6 @@ public class DecompileAndAttachAction extends AnAction {
                 }
             }
         };
-    }
-
-    private Promise<VirtualFile> findOrCreateBaseDir(Project project) {
-        AsyncPromise<VirtualFile> promise = new AsyncPromise<>();
-        ApplicationManager.getApplication().runWriteAction(() -> { //
-            VirtualFile baseDir = Arrays.stream(project.getBaseDir().getChildren()) //
-                    .filter(vf -> vf.getName().equals(baseDirName)) //
-                    .findFirst().orElseGet(() -> {
-                try {
-                    return project.getBaseDir().createChildDirectory(null, baseDirName);
-                } catch (IOException e) {
-                    promise.setError(e);
-                }
-                return null;
-            });
-            if (promise.getState() != Promise.State.REJECTED) {
-                promise.setResult(baseDir);
-            }
-        });
-        return promise;
     }
 
     private static JarOutputStream createJarOutputStream(File jarFile) throws IOException {

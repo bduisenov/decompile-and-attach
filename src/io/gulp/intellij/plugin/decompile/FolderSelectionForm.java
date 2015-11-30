@@ -18,7 +18,7 @@ import java.beans.PropertyChangeListener;
 
 public class FolderSelectionForm extends DialogWrapper {
 
-    private static final String title = "Folder For Storing Decompiled Lib Sources";
+    private static final String title = "Select Folder For Storing Decompiled Sources";
 
     private JPanel contentPane;
 
@@ -48,6 +48,7 @@ public class FolderSelectionForm extends DialogWrapper {
                     }
                 });
         workingDirComponent.getComponent().setEditable(false);
+        workingDirComponent.getComponent().setTextFieldPreferredWidth(50);
     }
 
     @Nullable
