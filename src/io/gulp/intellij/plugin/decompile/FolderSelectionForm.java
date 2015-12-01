@@ -18,9 +18,13 @@ import java.beans.PropertyChangeListener;
 
 public class FolderSelectionForm extends DialogWrapper {
 
-    private static final String title = "Select Folder For Storing Decompiled Sources";
+    private static final String title = "Select Folder";
+
+    private static final String description = "Select Project Specific Folder For Storing Decompiled Sources";
 
     private JPanel contentPane;
+
+    private JLabel descriptionLabel;
 
     private LabeledComponent<TextFieldWithBrowseButton> workingDirComponent;
 
@@ -29,6 +33,7 @@ public class FolderSelectionForm extends DialogWrapper {
         init();
         setTitle(title);
         setOKActionEnabled(false);
+        descriptionLabel.setText(description);
         workingDirComponent.setComponent(new TextFieldWithBrowseButton(new ActionListener() {
 
             @Override

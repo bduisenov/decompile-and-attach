@@ -39,6 +39,7 @@ import com.intellij.openapi.roots.libraries.Library;
 import com.intellij.openapi.roots.ui.configuration.PathUIUtils;
 import com.intellij.openapi.util.Pair;
 import com.intellij.openapi.util.io.FileUtil;
+import com.intellij.openapi.util.registry.Registry;
 import com.intellij.openapi.vfs.JarFileSystem;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
@@ -126,7 +127,7 @@ public class DecompileAndAttachAction extends AnAction {
             File tmpJarFile = FileUtil.createTempFile("decompiled", "tmp");
             Pair<String, Set<String>> result;
             try (JarOutputStream jarOutputStream = createJarOutputStream(tmpJarFile)) {
-                result = processor(jarOutputStream).apply(jarRoot);
+                result = processor(jarOutputStream, indicator).apply(jarRoot);
             }
             indicator.setFraction(indicator.getFraction() + (fractionStep * 70 / 100));
             indicator.setText("Attaching decompiled sources for '" + sourceVF.getName() + "'");
@@ -208,8 +209,15 @@ public class DecompileAndAttachAction extends AnAction {
      * @return {@code Pair<String, Set<String>>} containing the filename of a library and a set of
      * class names which failed to decompile
      */
-    private Function<VirtualFile, Pair<String, Set<String>>> processor(JarOutputStream jarOutputStream) {
+    private Function<VirtualFile, Pair<String, Set<String>>> processor(JarOutputStream jarOutputStream, ProgressIndicator indicator) {
         return new Function<VirtualFile, Pair<String, Set<String>>>() {
+
+            private String lineMappingKey = "decompiler.use.line.mapping";
+            private String lineTableKey = "decompiler.use.line.table";
+            private boolean initialLineMappingSetting;
+            private boolean initialLineTableSetting;
+
+            private String initialIndicatorText;
 
             private IdeaDecompiler decompiler = new IdeaDecompiler();
 
@@ -217,9 +225,14 @@ public class DecompileAndAttachAction extends AnAction {
 
             @Override
             public Pair<String, Set<String>> apply(VirtualFile head) {
+                initialLineMappingSetting = Registry.is(lineMappingKey);
+                initialLineTableSetting = Registry.is(lineTableKey);
+                Registry.get(lineMappingKey).setValue(false);
+                Registry.get(lineTableKey).setValue(true);
                 try {
                     VirtualFile[] children = head.getChildren();
                     checkState(children.length > 0, "jar file is empty");
+                    initialIndicatorText = indicator.getText();
                     process("", head.getChildren()[0], Iterables.skip(Arrays.asList(children), 1), new HashSet<>());
                     final String libraryName = head.getName();
                     final Pair<String, Set<String>> result = Pair.create(libraryName, failed);
@@ -227,6 +240,9 @@ public class DecompileAndAttachAction extends AnAction {
                     return result;
                 } catch (IOException e) {
                     Throwables.propagate(e);
+                } finally {
+                    Registry.get(lineMappingKey).setValue(initialLineMappingSetting);
+                    Registry.get(lineTableKey).setValue(initialLineTableSetting);
                 }
                 return null;
             }
@@ -241,6 +257,7 @@ public class DecompileAndAttachAction extends AnAction {
                     String path = relativePath + head.getName() + "/";
                     addDirectoryEntry(jarOutputStream, path, writtenPaths);
                     Iterable<VirtualFile> xs = Iterables.skip(Arrays.asList(children), 1);
+                    indicator.setText(initialIndicatorText + " " + path);
                     process(path, children[0], xs, writtenPaths);
                 } else {
                     if (!head.getName().contains("$") && "class".equals(head.getExtension())) {
