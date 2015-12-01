@@ -167,7 +167,13 @@ public class DecompileAndAttachAction extends AnAction {
     private File copy(Project project, String baseDirPath, VirtualFile sourceVF, File tmpJarFile, String filename)
             throws IOException {
         String libraryName = filename.replace(".jar", "-sources.jar");
-        File result = new File(baseDirPath + File.separator + libraryName);
+        String fullPath = baseDirPath + File.separator + libraryName;
+        File result = new File(fullPath);
+        if (result.exists()) {
+            FileUtil.deleteWithRenaming(result);
+            result = new File(fullPath);
+            result.createNewFile();
+        }
         FileUtil.copy(tmpJarFile, result);
         return result;
     }
