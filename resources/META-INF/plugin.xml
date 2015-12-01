@@ -1,7 +1,7 @@
 <idea-plugin version="2">
   <id>io.gulp.intellij</id>
   <name>Decompile and Attach</name>
-  <version>1.4</version>
+  <version>1.5</version>
   <vendor email="bduisenov@gmail.com" url="https://github.com/bduisenov">Babur</vendor>
 
   <description><![CDATA[
@@ -15,6 +15,15 @@
     ]]></description>
 
   <change-notes><![CDATA[
+      1.5 fixes and features:
+      <ul>
+        <li>jar decompilation continues even if decompilation for some classes failed</li>
+        <li>added multiple jars decompilation</li>
+        <li>added cancellation for process</li>
+        <li>added form for selecting folder where sources would be stored</li>
+        <li>switched from BYTECODE_SOURCE_MAPPING to USE_DEBUG_LINE_NUMBERS for decompiler. fix see github issue #6</li>
+      </ul>
+      <br/>
       1.4 decompiled sources are attached to source jar lib instead of creating a new lib
       <br/>
       1.3 added functionality for attaching decompiled sources to owner module of a jar

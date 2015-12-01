@@ -89,18 +89,37 @@ public class DecompileAndAttachAction extends AnAction {
         checkState(sourceVFs != null && sourceVFs.length > 0, "event#getData(VIRTUAL_FILE_ARRAY) returned empty array");
         new Task.Backgroundable(project, "Decompiling...", true) {
 
+            private String lineMappingKey = "decompiler.use.line.mapping";
+            private String lineTableKey = "decompiler.use.line.table";
+            private boolean initialLineMappingSetting;
+            private boolean initialLineTableSetting;
+
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
+                initialLineMappingSetting = Registry.is(lineMappingKey);
+                initialLineTableSetting = Registry.is(lineTableKey);
+                Registry.get(lineMappingKey).setValue(false);
+                Registry.get(lineTableKey).setValue(true);
+
                 indicator.setFraction(0.1);
+
                 Arrays.asList(sourceVFs).stream() //
                         .filter((vf) -> "jar".equals(vf.getExtension())) //
                         .forEach((sourceVF) -> process(project, baseDirPath.get(), sourceVF, indicator, 1D / sourceVFs.length));
                 indicator.setFraction(1.0);
+                Registry.get(lineMappingKey).setValue(initialLineMappingSetting);
+                Registry.get(lineTableKey).setValue(initialLineTableSetting);
             }
 
             @Override
             public boolean shouldStartInBackground() {
                 return true;
+            }
+
+            @Override
+            public void onCancel() {
+                Registry.get(lineMappingKey).setValue(initialLineMappingSetting);
+                Registry.get(lineTableKey).setValue(initialLineTableSetting);
             }
         }.queue();
     }
@@ -212,11 +231,6 @@ public class DecompileAndAttachAction extends AnAction {
     private Function<VirtualFile, Pair<String, Set<String>>> processor(JarOutputStream jarOutputStream, ProgressIndicator indicator) {
         return new Function<VirtualFile, Pair<String, Set<String>>>() {
 
-            private String lineMappingKey = "decompiler.use.line.mapping";
-            private String lineTableKey = "decompiler.use.line.table";
-            private boolean initialLineMappingSetting;
-            private boolean initialLineTableSetting;
-
             private String initialIndicatorText;
 
             private IdeaDecompiler decompiler = new IdeaDecompiler();
@@ -225,10 +239,6 @@ public class DecompileAndAttachAction extends AnAction {
 
             @Override
             public Pair<String, Set<String>> apply(VirtualFile head) {
-                initialLineMappingSetting = Registry.is(lineMappingKey);
-                initialLineTableSetting = Registry.is(lineTableKey);
-                Registry.get(lineMappingKey).setValue(false);
-                Registry.get(lineTableKey).setValue(true);
                 try {
                     VirtualFile[] children = head.getChildren();
                     checkState(children.length > 0, "jar file is empty");
@@ -240,9 +250,6 @@ public class DecompileAndAttachAction extends AnAction {
                     return result;
                 } catch (IOException e) {
                     Throwables.propagate(e);
-                } finally {
-                    Registry.get(lineMappingKey).setValue(initialLineMappingSetting);
-                    Registry.get(lineTableKey).setValue(initialLineTableSetting);
                 }
                 return null;
             }
