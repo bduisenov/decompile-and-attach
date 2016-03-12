@@ -1,10 +1,17 @@
 package io.gulp.intellij.plugin.decompile;
 
+import static com.google.common.base.Objects.firstNonNull;
 import static com.google.common.base.Preconditions.checkNotNull;
 import static com.google.common.base.Preconditions.checkState;
-import static com.intellij.notification.NotificationType.*;
+import static com.intellij.notification.NotificationType.ERROR;
+import static com.intellij.notification.NotificationType.INFORMATION;
+import static com.intellij.notification.NotificationType.WARNING;
 
-import java.io.*;
+import java.io.BufferedOutputStream;
+import java.io.ByteArrayInputStream;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.Optional;
@@ -14,16 +21,20 @@ import java.util.jar.JarOutputStream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
-import com.google.common.base.Strings;
+import io.gulp.intellij.plugin.decompile.bridge.FernFlowerDecompiler;
 import org.apache.commons.codec.Charsets;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.java.decompiler.IdeaDecompiler;
 
+import com.google.common.base.Strings;
 import com.google.common.base.Throwables;
 import com.google.common.collect.Iterables;
 import com.intellij.ide.util.PropertiesComponent;
 import com.intellij.notification.Notification;
-import com.intellij.openapi.actionSystem.*;
+import com.intellij.openapi.actionSystem.AnAction;
+import com.intellij.openapi.actionSystem.AnActionEvent;
+import com.intellij.openapi.actionSystem.CommonDataKeys;
+import com.intellij.openapi.actionSystem.PlatformDataKeys;
+import com.intellij.openapi.actionSystem.Presentation;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.application.Result;
@@ -34,7 +45,11 @@ import com.intellij.openapi.progress.ProcessCanceledException;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.roots.*;
+import com.intellij.openapi.roots.LibraryOrderEntry;
+import com.intellij.openapi.roots.ModuleRootManager;
+import com.intellij.openapi.roots.OrderEntry;
+import com.intellij.openapi.roots.OrderRootType;
+import com.intellij.openapi.roots.ProjectRootManager;
 import com.intellij.openapi.roots.libraries.Library;
 import com.intellij.openapi.roots.ui.configuration.PathUIUtils;
 import com.intellij.openapi.util.Pair;
@@ -45,6 +60,9 @@ import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.compiled.ClassFileDecompilers;
 import com.intellij.util.CommonProcessors;
+
+import io.gulp.intellij.plugin.decompile.bridge.CFRDecompiler;
+import io.gulp.intellij.plugin.decompile.bridge.Decompiler;
 
 /**
  * Created by bduisenov on 12/11/15.
@@ -158,7 +176,7 @@ public class DecompileAndAttachAction extends AnAction {
             FileUtil.delete(tmpJarFile);
         } catch (Exception e) {
             if (!(e instanceof ProcessCanceledException)) {
-                new Notification("DecompileAndAttach", "Jar lib couldn't be decompiled", e.getMessage(), ERROR).notify(project);
+                new Notification("DecompileAndAttach", "Jar lib couldn't be decompiled", firstNonNull(e.getMessage(), "shoot"), ERROR).notify(project);
             }
             Throwables.propagate(e);
         }
@@ -239,7 +257,7 @@ public class DecompileAndAttachAction extends AnAction {
 
             private String initialIndicatorText;
 
-            private IdeaDecompiler decompiler = new IdeaDecompiler();
+            private Decompiler decompiler;
 
             private Set<String> failed = new HashSet<>();
 
@@ -285,7 +303,8 @@ public class DecompileAndAttachAction extends AnAction {
             private void decompileAndSave(String relativeFilePath, VirtualFile file, Set<String> writternPaths)
                     throws IOException {
                 try {
-                    CharSequence decompiled = decompiler.getText(file);
+                    decompiler = new Decompiler(new FernFlowerDecompiler());
+                    CharSequence decompiled = decompiler.decompile(file);
                     addFileEntry(jarOutputStream, relativeFilePath, writternPaths, decompiled);
                 } catch (ClassFileDecompilers.Light.CannotDecompileException e) {
                     failed.add(file.getName());
