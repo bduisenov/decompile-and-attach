@@ -17,7 +17,6 @@ import java.util.zip.ZipOutputStream;
 import com.google.common.base.Strings;
 import org.apache.commons.codec.Charsets;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.java.decompiler.IdeaDecompiler;
 
 import com.google.common.base.Throwables;
 import com.google.common.collect.Iterables;
@@ -39,11 +38,11 @@ import com.intellij.openapi.roots.libraries.Library;
 import com.intellij.openapi.roots.ui.configuration.PathUIUtils;
 import com.intellij.openapi.util.Pair;
 import com.intellij.openapi.util.io.FileUtil;
-import com.intellij.openapi.util.registry.Registry;
 import com.intellij.openapi.vfs.JarFileSystem;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.compiled.ClassFileDecompilers;
+import com.intellij.psi.impl.compiled.ClassFileDecompiler;
 import com.intellij.util.CommonProcessors;
 
 /**
@@ -89,26 +88,14 @@ public class DecompileAndAttachAction extends AnAction {
         checkState(sourceVFs != null && sourceVFs.length > 0, "event#getData(VIRTUAL_FILE_ARRAY) returned empty array");
         new Task.Backgroundable(project, "Decompiling...", true) {
 
-            private String lineMappingKey = "decompiler.use.line.mapping";
-            private String lineTableKey = "decompiler.use.line.table";
-            private boolean initialLineMappingSetting;
-            private boolean initialLineTableSetting;
-
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
-                initialLineMappingSetting = Registry.is(lineMappingKey);
-                initialLineTableSetting = Registry.is(lineTableKey);
-                Registry.get(lineMappingKey).setValue(false);
-                Registry.get(lineTableKey).setValue(true);
-
                 indicator.setFraction(0.1);
 
                 Arrays.asList(sourceVFs).stream() //
                         .filter((vf) -> "jar".equals(vf.getExtension())) //
                         .forEach((sourceVF) -> process(project, baseDirPath.get(), sourceVF, indicator, 1D / sourceVFs.length));
                 indicator.setFraction(1.0);
-                Registry.get(lineMappingKey).setValue(initialLineMappingSetting);
-                Registry.get(lineTableKey).setValue(initialLineTableSetting);
             }
 
             @Override
@@ -116,11 +103,6 @@ public class DecompileAndAttachAction extends AnAction {
                 return true;
             }
 
-            @Override
-            public void onCancel() {
-                Registry.get(lineMappingKey).setValue(initialLineMappingSetting);
-                Registry.get(lineTableKey).setValue(initialLineTableSetting);
-            }
         }.queue();
     }
 
@@ -141,7 +123,11 @@ public class DecompileAndAttachAction extends AnAction {
 
     private void process(Project project, String baseDirPath, VirtualFile sourceVF, ProgressIndicator indicator, double fractionStep) {
         indicator.setText("Decompiling '" + sourceVF.getName() + "'");
-        VirtualFile jarRoot = JarFileSystem.getInstance().getJarRootForLocalFile(sourceVF);
+        JarFileSystem jarFileInstance = JarFileSystem.getInstance();
+        VirtualFile jarRoot = jarFileInstance.getJarRootForLocalFile(sourceVF);
+        if (jarRoot == null) {
+            jarRoot = jarFileInstance.getJarRootForLocalFile(jarFileInstance.getLocalVirtualFileFor(sourceVF));
+        }
         try {
             File tmpJarFile = FileUtil.createTempFile("decompiled", "tmp");
             Pair<String, Set<String>> result;
@@ -190,7 +176,8 @@ public class DecompileAndAttachAction extends AnAction {
                 @Override
                 protected void run(@NotNull Result<Void> result) throws Throwable {
                     final Module currentModule = ProjectRootManager.getInstance(project).getFileIndex()
-                            .getModuleForFile(sourceVF);
+                            .getModuleForFile(sourceVF, false);
+
                     checkNotNull(currentModule, "could not find current module");
                     Optional<Library> moduleLib = findModuleDependency(currentModule, sourceVF);
                     checkState(moduleLib.isPresent(), "could not find library in module dependencies");
@@ -239,7 +226,7 @@ public class DecompileAndAttachAction extends AnAction {
 
             private String initialIndicatorText;
 
-            private IdeaDecompiler decompiler = new IdeaDecompiler();
+            private ClassFileDecompiler decompiler = new ClassFileDecompiler();
 
             private Set<String> failed = new HashSet<>();
 
@@ -285,7 +272,7 @@ public class DecompileAndAttachAction extends AnAction {
             private void decompileAndSave(String relativeFilePath, VirtualFile file, Set<String> writternPaths)
                     throws IOException {
                 try {
-                    CharSequence decompiled = decompiler.getText(file);
+                    CharSequence decompiled = decompiler.decompile(file);
                     addFileEntry(jarOutputStream, relativeFilePath, writternPaths, decompiled);
                 } catch (ClassFileDecompilers.Light.CannotDecompileException e) {
                     failed.add(file.getName());
