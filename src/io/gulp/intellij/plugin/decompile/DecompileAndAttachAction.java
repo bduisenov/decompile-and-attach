@@ -1,23 +1,6 @@
 package io.gulp.intellij.plugin.decompile;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
-import static com.intellij.notification.NotificationType.*;
-
-import java.io.*;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Optional;
-import java.util.Set;
-import java.util.function.Function;
-import java.util.jar.JarOutputStream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
-
 import com.google.common.base.Strings;
-import org.apache.commons.codec.Charsets;
-import org.jetbrains.annotations.NotNull;
-
 import com.google.common.base.Throwables;
 import com.google.common.collect.Iterables;
 import com.intellij.ide.util.PropertiesComponent;
@@ -44,6 +27,22 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.compiled.ClassFileDecompilers;
 import com.intellij.psi.impl.compiled.ClassFileDecompiler;
 import com.intellij.util.CommonProcessors;
+import org.apache.commons.codec.Charsets;
+import org.jetbrains.annotations.NotNull;
+
+import java.io.*;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.jar.JarOutputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
+import static com.intellij.notification.NotificationType.*;
 
 /**
  * Created by bduisenov on 12/11/15.
@@ -90,11 +89,13 @@ public class DecompileAndAttachAction extends AnAction {
 
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
-                indicator.setFraction(0.1);
+                indicator.setFraction(0.1D);
 
-                Arrays.asList(sourceVFs).stream() //
-                        .filter((vf) -> "jar".equals(vf.getExtension())) //
-                        .forEach((sourceVF) -> process(project, baseDirPath.get(), sourceVF, indicator, 1D / sourceVFs.length));
+                for (VirtualFile vf : Arrays.asList(sourceVFs)) {
+                    if ("jar".equals(vf.getExtension())) {
+                        process(project, baseDirPath.get(), vf, indicator, 1D / sourceVFs.length);
+                    }
+                }
                 indicator.setFraction(1.0);
             }
 
@@ -121,7 +122,8 @@ public class DecompileAndAttachAction extends AnAction {
         return Optional.ofNullable(result);
     }
 
-    private void process(Project project, String baseDirPath, VirtualFile sourceVF, ProgressIndicator indicator, double fractionStep) {
+    private void process(Project project, String baseDirPath, VirtualFile sourceVF, ProgressIndicator indicator,
+                         double fractionStep) {
         indicator.setText("Decompiling '" + sourceVF.getName() + "'");
         JarFileSystem jarFileInstance = JarFileSystem.getInstance();
         VirtualFile jarRoot = jarFileInstance.getJarRootForLocalFile(sourceVF);
@@ -129,11 +131,13 @@ public class DecompileAndAttachAction extends AnAction {
             jarRoot = jarFileInstance.getJarRootForLocalFile(jarFileInstance.getLocalVirtualFileFor(sourceVF));
         }
         try {
+
             File tmpJarFile = FileUtil.createTempFile("decompiled", "tmp");
             Pair<String, Set<String>> result;
             try (JarOutputStream jarOutputStream = createJarOutputStream(tmpJarFile)) {
                 result = processor(jarOutputStream, indicator).apply(jarRoot);
             }
+
             indicator.setFraction(indicator.getFraction() + (fractionStep * 70 / 100));
             indicator.setText("Attaching decompiled sources for '" + sourceVF.getName() + "'");
             result.second.forEach((failedFile) -> new Notification("DecompileAndAttach", "Decompilation problem",
@@ -142,9 +146,11 @@ public class DecompileAndAttachAction extends AnAction {
             attach(project, sourceVF, resultJar);
             indicator.setFraction(indicator.getFraction() + (fractionStep * 30 / 100));
             FileUtil.delete(tmpJarFile);
+
         } catch (Exception e) {
             if (!(e instanceof ProcessCanceledException)) {
-                new Notification("DecompileAndAttach", "Jar lib couldn't be decompiled", e.getMessage(), ERROR).notify(project);
+                new Notification("DecompileAndAttach", "Jar lib couldn't be decompiled",
+                        sourceVF.getName()+" "+e.getClass().getName()+" "+e.toString(), ERROR).notify(project);
             }
             Throwables.propagate(e);
         }
@@ -178,18 +184,22 @@ public class DecompileAndAttachAction extends AnAction {
                     final Module currentModule = ProjectRootManager.getInstance(project).getFileIndex()
                             .getModuleForFile(sourceVF, false);
 
-                    checkNotNull(currentModule, "could not find current module");
-                    Optional<Library> moduleLib = findModuleDependency(currentModule, sourceVF);
-                    checkState(moduleLib.isPresent(), "could not find library in module dependencies");
-                    Library.ModifiableModel model = moduleLib.get().getModifiableModel();
-                    for (VirtualFile root : roots) {
-                        model.addRoot(root, OrderRootType.SOURCES);
-                    }
-                    model.commit();
+                    if (currentModule != null) {
+                        Optional<Library> moduleLib = findModuleDependency(currentModule, sourceVF);
+                        checkState(moduleLib.isPresent(), "could not find library in module dependencies");
+                        Library.ModifiableModel model = moduleLib.get().getModifiableModel();
+                        for (VirtualFile root : roots) {
+                            model.addRoot(root, OrderRootType.SOURCES);
+                        }
+                        model.commit();
 
-                    new Notification("DecompileAndAttach", "Jar Sources Added", "decompiled sources " + resultJar.getName()
-                            + " where added successfully to dependency of a module '" + currentModule.getName() + "'",
-                            INFORMATION).notify(project);
+                        new Notification("DecompileAndAttach", "Jar Sources Added", "decompiled sources " + resultJar.getName()
+                                + " where added successfully to dependency of a module '" + currentModule.getName() + "'",
+                                INFORMATION).notify(project);
+                    } else if (!("jar".equals(sourceVF.getExtension()))) {
+                        new Notification("DecompileAndAttach", "Failed getModule",
+                                "File is " + sourceVF.getName(), WARNING).notify(project);
+                    }
                 }
             }.execute();
         } , ModalityState.NON_MODAL);
@@ -252,16 +262,21 @@ public class DecompileAndAttachAction extends AnAction {
                 if (head == null) {
                     return;
                 }
+
                 VirtualFile[] children = head.getChildren();
-                if (head.isDirectory() && children.length > 0) {
+                if (head.isDirectory()) {
                     String path = relativePath + head.getName() + "/";
                     addDirectoryEntry(jarOutputStream, path, writtenPaths);
-                    Iterable<VirtualFile> xs = Iterables.skip(Arrays.asList(children), 1);
-                    indicator.setText(initialIndicatorText + " " + path);
-                    process(path, children[0], xs, writtenPaths);
+                    if (children.length > 0) {
+                        Iterable<VirtualFile> xs = Iterables.skip(Arrays.asList(children), 1);
+                        indicator.setText(initialIndicatorText + " " + path);
+                        process(path, children[0], xs, writtenPaths);
+                    }
                 } else {
                     if (!head.getName().contains("$") && "class".equals(head.getExtension())) {
                         decompileAndSave(relativePath + head.getNameWithoutExtension() + ".java", head, writtenPaths);
+                    } else if  (!"class".equals(head.getExtension()) && !"jar".equals(head.getExtension())){
+                        addFileEntry(jarOutputStream, relativePath + head.getName(), writtenPaths, head);
                     }
                 }
                 if (tail != null && !Iterables.isEmpty(tail)) {
@@ -317,6 +332,27 @@ public class DecompileAndAttachAction extends AnAction {
             FileUtil.copy(fileIS, jarOS);
         } finally {
             fileIS.close();
+        }
+        jarOS.closeEntry();
+    }
+
+    private static void addFileEntry(ZipOutputStream jarOS, String relativePath, Set<String> writtenPaths,
+            VirtualFile raw) throws IOException {
+        if (!writtenPaths.add(relativePath))
+            return;
+
+        long size = raw.getLength();
+        ZipEntry e = new ZipEntry(relativePath);
+        if (size == 0) {
+            e.setMethod(ZipEntry.STORED);
+            e.setSize(0);
+            e.setCrc(0);
+        }
+        jarOS.putNextEntry(e);
+        try {
+            FileUtil.copy(raw.getInputStream(), jarOS);
+        } finally {
+
         }
         jarOS.closeEntry();
     }
