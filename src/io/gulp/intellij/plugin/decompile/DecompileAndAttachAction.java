@@ -1,6 +1,23 @@
 package io.gulp.intellij.plugin.decompile;
 
+import static com.google.common.base.Preconditions.checkNotNull;
+import static com.google.common.base.Preconditions.checkState;
+import static com.intellij.notification.NotificationType.*;
+
+import java.io.*;
+import java.util.Arrays;
+import java.util.HashSet;
+import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
+import java.util.jar.JarOutputStream;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipOutputStream;
+
 import com.google.common.base.Strings;
+import org.apache.commons.codec.Charsets;
+import org.jetbrains.annotations.NotNull;
+
 import com.google.common.base.Throwables;
 import com.google.common.collect.Iterables;
 import com.intellij.ide.util.PropertiesComponent;
@@ -27,22 +44,6 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.psi.compiled.ClassFileDecompilers;
 import com.intellij.psi.impl.compiled.ClassFileDecompiler;
 import com.intellij.util.CommonProcessors;
-import org.apache.commons.codec.Charsets;
-import org.jetbrains.annotations.NotNull;
-
-import java.io.*;
-import java.util.Arrays;
-import java.util.HashSet;
-import java.util.Optional;
-import java.util.Set;
-import java.util.function.Function;
-import java.util.jar.JarOutputStream;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipOutputStream;
-
-import static com.google.common.base.Preconditions.checkNotNull;
-import static com.google.common.base.Preconditions.checkState;
-import static com.intellij.notification.NotificationType.*;
 
 /**
  * Created by bduisenov on 12/11/15.
@@ -89,13 +90,11 @@ public class DecompileAndAttachAction extends AnAction {
 
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
-                indicator.setFraction(0.1D);
+                indicator.setFraction(0.1);
 
-                for (VirtualFile vf : Arrays.asList(sourceVFs)) {
-                    if ("jar".equals(vf.getExtension())) {
-                        process(project, baseDirPath.get(), vf, indicator, 1D / sourceVFs.length);
-                    }
-                }
+                Arrays.asList(sourceVFs).stream() //
+                        .filter((vf) -> "jar".equals(vf.getExtension())) //
+                        .forEach((sourceVF) -> process(project, baseDirPath.get(), sourceVF, indicator, 1D / sourceVFs.length));
                 indicator.setFraction(1.0);
             }
 
@@ -122,8 +121,7 @@ public class DecompileAndAttachAction extends AnAction {
         return Optional.ofNullable(result);
     }
 
-    private void process(Project project, String baseDirPath, VirtualFile sourceVF, ProgressIndicator indicator,
-                         double fractionStep) {
+    private void process(Project project, String baseDirPath, VirtualFile sourceVF, ProgressIndicator indicator, double fractionStep) {
         indicator.setText("Decompiling '" + sourceVF.getName() + "'");
         JarFileSystem jarFileInstance = JarFileSystem.getInstance();
         VirtualFile jarRoot = jarFileInstance.getJarRootForLocalFile(sourceVF);
@@ -131,13 +129,11 @@ public class DecompileAndAttachAction extends AnAction {
             jarRoot = jarFileInstance.getJarRootForLocalFile(jarFileInstance.getLocalVirtualFileFor(sourceVF));
         }
         try {
-
             File tmpJarFile = FileUtil.createTempFile("decompiled", "tmp");
             Pair<String, Set<String>> result;
             try (JarOutputStream jarOutputStream = createJarOutputStream(tmpJarFile)) {
                 result = processor(jarOutputStream, indicator).apply(jarRoot);
             }
-
             indicator.setFraction(indicator.getFraction() + (fractionStep * 70 / 100));
             indicator.setText("Attaching decompiled sources for '" + sourceVF.getName() + "'");
             result.second.forEach((failedFile) -> new Notification("DecompileAndAttach", "Decompilation problem",
